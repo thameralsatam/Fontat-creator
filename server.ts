@@ -13,35 +13,40 @@ app.post('/api/generate-font', (req, res) => {
   try {
     const { glyphs } = req.body;
     const templatePath = path.join(process.cwd(), 'template.ttf');
-
-    // فتح القالب
     const buffer = fs.readFileSync(templatePath);
+    
+    // 1. افتح القالب
     const font = Font.create(buffer, { type: 'ttf' });
     const fontData = font.get();
 
-    // استبدال المحارف
+    // 2. "حشر" المحارف الجديدة حشر في القالب
     glyphs.forEach((g: any) => {
-      const targetIndex = fontData.glyf.findIndex((item: any) => 
-        item.unicode && item.unicode.includes(g.unicode)
-      );
+      // إجبار الحرف إنه يكون له إحداثيات واضحة ومقياس كبير
+      const newGlyph = {
+        name: g.name || "custom_char",
+        unicode: [parseInt(g.unicode)], // تأكد إنه رقم
+        d: g.pathData, 
+        advanceWidth: 1500, // عرض ثابت وكبير عشان يبين
+        xMin: 0,
+        yMin: 0,
+        xMax: 1000,
+        yMax: 1000
+      };
 
-      if (targetIndex !== -1) {
-        fontData.glyf[targetIndex].d = g.pathData;
-        fontData.glyf[targetIndex].advanceWidth = g.advanceWidth || 1000;
-      } else {
-        fontData.glyf.push({
-          unicode: [g.unicode],
-          name: g.name,
-          d: g.pathData,
-          advanceWidth: g.advanceWidth || 1000
-        });
-      }
+      // ضيفه في أول القائمة عشان البرامج تشوفه بسرعة
+      fontData.glyf.unshift(newGlyph); 
     });
 
+    // 3. تعطيل أي عملية تحسين قد تحذف المحارف "الغريبة"
     font.set(fontData);
-    font.optimize();
+    
+    const ttfBuffer = font.write({ 
+      type: 'ttf', 
+      hinting: false, // عطل الهنتنج حالياً
+      writeZeroGlyph: true 
+    });
 
-    const ttfBuffer = font.write({ type: 'ttf', hinting: true });
+    res.setHeader('Content-Type', 'application/x-font-ttf');
     res.send(Buffer.from(ttfBuffer));
 
   } catch (error: any) {
