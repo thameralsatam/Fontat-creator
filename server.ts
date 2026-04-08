@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 // @ts-ignore
-import { Font, Path } from 'fonteditor-core';
+import { Font } from 'fonteditor-core';
 
 const app = express();
 app.use(cors());
@@ -12,28 +12,41 @@ app.post('/api/generate-font', (req, res) => {
     const { glyphs } = req.body;
 
     let svg = `<?xml version="1.0" standalone="no"?>
-    <svg xmlns="http://www.w3.org/2000/svg">
-    <defs>
-    <font id="SmartFont" horiz-adv-x="1200">
-      <font-face font-family="SmartFont" units-per-em="2048" ascent="1600" descent="-448" />
-      <missing-glyph horiz-adv-x="500" d="M0,0 L0,500 L500,500 L500,0 Z" />`;
+<svg xmlns="http://www.w3.org/2000/svg">
+<defs>
+<font id="SmartFont" horiz-adv-x="1200">
+  <font-face font-family="SmartFont" units-per-em="2048" ascent="1600" descent="-448" />
+  <missing-glyph horiz-adv-x="500" d="M0 0 L500 0 L500 500 L0 500 Z" />`;
 
     glyphs.forEach((g) => {
-      // 🔥 تحويل المسار بشكل صحيح للخطوط
-      let pathObj = Path.fromSVG(g.pathData);
+      let path = g.pathData.trim();
 
-      // قلب المحور Y
-      pathObj.scale(1, -1);
+      // تأكد المسار مغلق
+      if (!path.toUpperCase().endsWith('Z')) {
+        path += ' Z';
+      }
 
-      // تكبير الحرف (مهم جداً)
-      pathObj.scale(3, 3);
+      // 🔥 إصلاح الإحداثيات (أهم شي)
+      const SCALE = 3;
+      const OFFSET_Y = 1400;
 
-      // رفعه للأعلى داخل الخط
-      pathObj.translate(0, 1400);
+      let i = 0;
+      path = path.replace(/-?\d+(\.\d+)?/g, (num) => {
+        let value = parseFloat(num);
 
-      const fixedPath = pathObj.toSVG();
+        if (i % 2 === 0) {
+          // X
+          value = value * SCALE;
+        } else {
+          // Y
+          value = -value * SCALE + OFFSET_Y;
+        }
 
-      // Unicode (يدعم رقم أو حرف)
+        i++;
+        return value;
+      });
+
+      // Unicode (رقم أو حرف)
       let unicodeHex;
       if (typeof g.unicode === 'number') {
         unicodeHex = g.unicode.toString(16);
@@ -42,15 +55,18 @@ app.post('/api/generate-font', (req, res) => {
       }
 
       svg += `
-      <glyph 
-        glyph-name="${g.name}" 
-        unicode="&#x${unicodeHex};" 
-        d="${fixedPath}" 
-        horiz-adv-x="${g.advanceWidth || 1200}" 
-      />`;
+  <glyph 
+    glyph-name="${g.name}" 
+    unicode="&#x${unicodeHex};" 
+    d="${path}" 
+    horiz-adv-x="${g.advanceWidth || 1200}" 
+  />`;
     });
 
-    svg += `</font></defs></svg>`;
+    svg += `
+</font>
+</defs>
+</svg>`;
 
     const font = Font.create(svg, { type: 'svg' });
 
@@ -73,4 +89,4 @@ app.post('/api/generate-font', (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log('Server running on port 3000'));
+app.listen(3000, () => console.log('✅ Server running on port 3000'));
