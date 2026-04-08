@@ -4,6 +4,18 @@ import cors from 'cors';
 import { Font } from 'fonteditor-core';
 
 const app = express();
+
+// ⚡ إضافة logging لكل request
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url} from ${req.ip}`);
+  console.log("Headers:", req.headers);
+  // إذا كان POST مع body
+  if (req.method === 'POST') {
+    console.log("Body:", req.body);
+  }
+  next();
+});
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
@@ -21,38 +33,25 @@ app.post('/api/generate-font', (req, res) => {
     glyphs.forEach((g) => {
       let path = g.pathData.trim();
 
-      // تأكد المسار مغلق
       if (!path.toUpperCase().endsWith('Z')) {
         path += ' Z';
       }
 
-      // 🔥 إصلاح الإحداثيات (أهم شي)
       const SCALE = 3;
       const OFFSET_Y = 1400;
 
       let i = 0;
       path = path.replace(/-?\d+(\.\d+)?/g, (num) => {
         let value = parseFloat(num);
-
-        if (i % 2 === 0) {
-          // X
-          value = value * SCALE;
-        } else {
-          // Y
-          value = -value * SCALE + OFFSET_Y;
-        }
-
+        if (i % 2 === 0) value = value * SCALE; // X
+        else value = -value * SCALE + OFFSET_Y; // Y
         i++;
         return value;
       });
 
-      // Unicode (رقم أو حرف)
       let unicodeHex;
-      if (typeof g.unicode === 'number') {
-        unicodeHex = g.unicode.toString(16);
-      } else {
-        unicodeHex = g.unicode.codePointAt(0).toString(16);
-      }
+      if (typeof g.unicode === 'number') unicodeHex = g.unicode.toString(16);
+      else unicodeHex = g.unicode.codePointAt(0).toString(16);
 
       svg += `
   <glyph 
