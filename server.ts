@@ -11,8 +11,7 @@ app.post('/api/generate-font', (req, res) => {
   try {
     const { glyphs } = req.body;
 
-    // إنشاء هيكل الخط بمربع قياسي (1000x1000)
-    // الصفر في الأسفل (Descent=0) والقمة في الأعلى (Ascent=1000)
+    // مربع قياسي 1000x1000 لضمان مطابقة الاستعراض
     let svg = `<?xml version="1.0" standalone="no"?>
     <svg xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -21,12 +20,10 @@ app.post('/api/generate-font', (req, res) => {
       <missing-glyph horiz-adv-x="1000" d="M0 0 L1000 0 L1000 1000 L0 1000 Z" />`;
 
     glyphs.forEach((g: any) => {
-      // إغلاق المسار لضمان عدم وجود أجزاء شفافة
       let d = g.pathData.trim();
       if (!d.toUpperCase().endsWith('Z')) d += ' Z';
       
       const uni = parseInt(g.unicode).toString(16);
-      // استخدام advanceWidth القادم من الموقع، وإذا لم يوجد نستخدم 1000
       const width = g.advanceWidth || 1000;
 
       svg += `\n<glyph glyph-name="${g.name}" unicode="&#x${uni};" d="${d}" horiz-adv-x="${width}" />`;
@@ -34,20 +31,25 @@ app.post('/api/generate-font', (req, res) => {
 
     svg += `\n</font></defs></svg>`;
 
-    // المعالجة والتحويل لـ TTF
     const font = Font.create(svg, { type: 'svg' });
-    font.optimize(); // تنظيف المسارات فقط
-    font.compound2simple(); // جعلها كتلة مصمتة
+    
+    // ملاحظة: يمكنك حذف font.optimize() إذا وجدت أن النقاط لا تزال تتغير بشكل لا يعجبك
+    font.optimize(); 
+    font.compound2simple(); 
 
-    const ttfBuffer = font.write({ type: 'ttf' });
-    res.setHeader('Content-Type', 'font/ttf');
-    res.send(Buffer.from(ttfBuffer));
+    // التصدير بصيغة OTF للحفاظ على جودة الـ Cubic Bézier
+    const otfBuffer = font.write({ type: 'otf' });
+    
+    res.setHeader('Content-Type', 'font/otf');
+    res.setHeader('Content-Disposition', 'attachment; filename="SmartArabic.otf"');
+    res.send(Buffer.from(otfBuffer));
 
   } catch (error: any) {
     res.status(500).send(error.message);
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-    console.log("Server running perfectly on port 3000");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running perfectly on port ${PORT}`);
 });
