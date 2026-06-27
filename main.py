@@ -13,7 +13,7 @@ from fontTools.pens.cu2quPen import Cu2QuPen
 
 app = FastAPI(title="Arabic Font Generator Service")
 
-# تفعيل الـ CORS للسماح بالاتصال من واجهة الموقع دون مشاكل
+# تفعيل الـ CORS للسماح بالاتصال من واجهة الموقع
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,15 +35,22 @@ class FontRequest(BaseModel):
     fontName: Optional[str] = "SmartArabicFont"
     glyphs: List[GlyphInput]
 
+# ==========================================
+# 1. مسار الفحص (للتأكد أن السيرفر يعمل)
+# ==========================================
+@app.get("/")
+def health_check():
+    return {"status": "success", "message": "سيرفر توليد الخطوط شغال ومستعد 🚀"}
+
+# ==========================================
+# 2. منطق تحليل مسارات SVG
+# ==========================================
 def parse_and_draw_svg(path_str: str, pen):
-    # تفكيك رموز وأرقام مسار الـ SVG
     tokens = re.findall(r'([a-zA-Z])|(-?\d*(?:\.\d+)?(?:[eE][-+]?\d+)?)', path_str)
     tokens = [t[0] or t[1] for t in tokens if t[0] or t[1]]
     
-    current_x = 0.0
-    current_y = 0.0
-    start_x = 0.0
-    start_y = 0.0
+    current_x, current_y = 0.0, 0.0
+    start_x, start_y = 0.0, 0.0
     
     i = 0
     cmd = 'M'
@@ -58,28 +65,24 @@ def parse_and_draw_svg(path_str: str, pen):
         
         try:
             if cmd == 'M':
-                x = float(tokens[i])
-                y = float(tokens[i+1])
+                x, y = float(tokens[i]), float(tokens[i+1])
                 pen.moveTo((x, y))
                 current_x, current_y = x, y
                 start_x, start_y = x, y
                 i += 2
             elif cmd == 'm':
-                x = current_x + float(tokens[i])
-                y = current_y + float(tokens[i+1])
+                x, y = current_x + float(tokens[i]), current_y + float(tokens[i+1])
                 pen.moveTo((x, y))
                 current_x, current_y = x, y
                 start_x, start_y = x, y
                 i += 2
             elif cmd == 'L':
-                x = float(tokens[i])
-                y = float(tokens[i+1])
+                x, y = float(tokens[i]), float(tokens[i+1])
                 pen.lineTo((x, y))
                 current_x, current_y = x, y
                 i += 2
             elif cmd == 'l':
-                x = current_x + float(tokens[i])
-                y = current_y + float(tokens[i+1])
+                x, y = current_x + float(tokens[i]), current_y + float(tokens[i+1])
                 pen.lineTo((x, y))
                 current_x, current_y = x, y
                 i += 2
@@ -104,38 +107,28 @@ def parse_and_draw_svg(path_str: str, pen):
                 current_y = y
                 i += 1
             elif cmd == 'C':
-                x1 = float(tokens[i])
-                y1 = float(tokens[i+1])
-                x2 = float(tokens[i+2])
-                y2 = float(tokens[i+3])
-                x = float(tokens[i+4])
-                y = float(tokens[i+5])
+                x1, y1 = float(tokens[i]), float(tokens[i+1])
+                x2, y2 = float(tokens[i+2]), float(tokens[i+3])
+                x, y = float(tokens[i+4]), float(tokens[i+5])
                 pen.curveTo((x1, y1), (x2, y2), (x, y))
                 current_x, current_y = x, y
                 i += 6
             elif cmd == 'c':
-                x1 = current_x + float(tokens[i])
-                y1 = current_y + float(tokens[i+1])
-                x2 = current_x + float(tokens[i+2])
-                y2 = current_y + float(tokens[i+3])
-                x = current_x + float(tokens[i+4])
-                y = current_y + float(tokens[i+5])
+                x1, y1 = current_x + float(tokens[i]), current_y + float(tokens[i+1])
+                x2, y2 = current_x + float(tokens[i+2]), current_y + float(tokens[i+3])
+                x, y = current_x + float(tokens[i+4]), current_y + float(tokens[i+5])
                 pen.curveTo((x1, y1), (x2, y2), (x, y))
                 current_x, current_y = x, y
                 i += 6
             elif cmd == 'Q':
-                x1 = float(tokens[i])
-                y1 = float(tokens[i+1])
-                x = float(tokens[i+2])
-                y = float(tokens[i+3])
+                x1, y1 = float(tokens[i]), float(tokens[i+1])
+                x, y = float(tokens[i+2]), float(tokens[i+3])
                 pen.qCurveTo((x1, y1), (x, y))
                 current_x, current_y = x, y
                 i += 4
             elif cmd == 'q':
-                x1 = current_x + float(tokens[i])
-                y1 = current_y + float(tokens[i+1])
-                x = current_x + float(tokens[i+2])
-                y = current_y + float(tokens[i+3])
+                x1, y1 = current_x + float(tokens[i]), current_y + float(tokens[i+1])
+                x, y = current_x + float(tokens[i+2]), current_y + float(tokens[i+3])
                 pen.qCurveTo((x1, y1), (x, y))
                 current_x, current_y = x, y
                 i += 4
@@ -149,12 +142,14 @@ def parse_and_draw_svg(path_str: str, pen):
             print(f"Skipping malformed command segment: {cmd}, error: {e}")
             i += 1
 
+# ==========================================
+# 3. مسار توليد ملف الخط
+# ==========================================
 @app.post("/api/generate-font")
 def generate_font(request: FontRequest):
     if not request.glyphs:
         raise HTTPException(status_code=400, detail="الرجاء إرسال حرف واحد على الأقل.")
     
-    # 1. تحديد أبعاد الخط الافتراضية
     ascent = 800
     descent = -200
     
@@ -171,7 +166,7 @@ def generate_font(request: FontRequest):
     glyphs = {}
     metrics = {}
     
-    # بناء شكل مربع الـ .notdef الإجباري في خطوط TrueType
+    # مربع الـ notdef
     notdef_pen = TTGlyphPen(None)
     notdef_pen.moveTo((100, 0))
     notdef_pen.lineTo((100, ascent))
@@ -183,19 +178,19 @@ def generate_font(request: FontRequest):
     notdef_pen.lineTo((450, ascent - 50))
     notdef_pen.lineTo((150, ascent - 50))
     notdef_pen.closePath()
-    glyphs[".notdef"] = notdef_pen.glyph()  # تم تصحيحها لـ .glyph()
+    glyphs[".notdef"] = notdef_pen.glyph()
     metrics[".notdef"] = (600, 100)
     
-    # إضافة مسافة تلقائية (Space) إذا لم تكن موجودة
+    # حرف المسافة (Space)
     space_included = any(g.unicode == 32 or g.name == "space" for g in request.glyphs)
     if not space_included:
         glyph_order.append("space")
         character_map[32] = "space"
         space_pen = TTGlyphPen(None)
-        glyphs["space"] = space_pen.glyph()  # تم تصحيحها لـ .glyph()
+        glyphs["space"] = space_pen.glyph()
         metrics["space"] = (300, 0)
         
-    # معالجة محارف المستخدم
+    # معالجة بقية المحارف المرسلة
     for g in request.glyphs:
         glyph_name = g.name if g.name else f"uni{g.unicode:04X}"
         if glyph_name == ".notdef":
@@ -203,19 +198,18 @@ def generate_font(request: FontRequest):
             
         base_pen = TTGlyphPen(None)
         
-        # 2. حل مشكلة قلب الحروف (Y-Axis Inversion)
-        # مصفوفة تحويل لقلب إحداثيات Y الخاصة بـ SVG (الضرب في -1 ثم الإزاحة للأعلى بمقدار الـ ascent)
+        # مصفوفة تحويل إحداثيات Y
         transform_matrix = (1, 0, 0, -1, 0, ascent)
         t_pen = TransformPen(base_pen, transform_matrix)
         
-        # 3. حل مشكلة المنحنيات التكعيبية وتحويلها لتربيعية متوافقة مع الـ TTF
+        # معالجة المنحنيات التكعيبية
         cu2qu_pen = Cu2QuPen(t_pen, max_err=2.0)
         
         # رسم المسار
         parse_and_draw_svg(g.pathData, cu2qu_pen)
         
         try:
-            glyph_outline = base_pen.glyph()  # تم تصحيحها لـ .glyph()
+            glyph_outline = base_pen.glyph()
         except Exception as e:
             print(f"Failed to compile glyph {glyph_name}: {e}")
             glyph_outline = TTGlyphPen(None).glyph()
@@ -223,11 +217,10 @@ def generate_font(request: FontRequest):
         glyph_order.append(glyph_name)
         glyphs[glyph_name] = glyph_outline
         
-        # 4. حساب الـ Left Side Bearing (LSB) ديناميكياً من أبعاد الحرف الفعلي
-        # لمنع تداخل أو التصاق الحروف بشكل مشوه
+        # حساب الـ Left Side Bearing بشكل آمن 100%
         try:
-            bbox = glyph_outline.getBounds(glyphs)
-            lsb = int(bbox[0]) if bbox else 0
+            # نستخرج xMin الفعلي بعد الرسم بدلاً من getBounds
+            lsb = int(getattr(glyph_outline, 'xMin', 0))
         except Exception:
             lsb = 0
             
@@ -236,7 +229,7 @@ def generate_font(request: FontRequest):
         if g.unicode and g.unicode > 0:
             character_map[int(g.unicode)] = glyph_name
             
-    # إعداد بنية وجداول الخط
+    # بناء جداول الخط
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap(character_map)
     fb.setupGlyphs(glyphs)
@@ -255,7 +248,6 @@ def generate_font(request: FontRequest):
     fb.setupOS2(sTypoAscender=int(ascent), sTypoDescender=int(descent))
     fb.setupPost()
     
-    # توليد ملف الـ TTF وحفظه في الذاكرة كـ Binary وإرساله للمتصفح
     buf = BytesIO()
     fb.save(buf)
     buf.seek(0)
