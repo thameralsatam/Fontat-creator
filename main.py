@@ -1,5 +1,5 @@
-import re
 import os
+import re
 from io import BytesIO
 from fastapi import FastAPI, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,12 +8,13 @@ from typing import List, Optional
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.cu2quPen import Cu2QuPen
+
+# استخدام المكتبة الاحترافية لقراءة مسارات SVG
+from svgelements import Path, Move, Line, QuadraticBezier, CubicBezier, Close, Arc
 
 app = FastAPI(title="Arabic Font Generator Service")
 
-# تفعيل الـ CORS للسماح بالاتصال من واجهة الموقع
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,123 +36,37 @@ class FontRequest(BaseModel):
     fontName: Optional[str] = "SmartArabicFont"
     glyphs: List[GlyphInput]
 
-# ==========================================
-# 1. مسار الفحص (للتأكد أن السيرفر يعمل)
-# ==========================================
 @app.get("/")
 def health_check():
-    return {"status": "success", "message": "سيرفر توليد الخطوط شغال ومستعد 🚀"}
+    return {"status": "success", "message": "سيرفر البايثون المحدث يعمل بكفاءة 🚀"}
 
-# ==========================================
-# 2. منطق تحليل مسارات SVG
-# ==========================================
 def parse_and_draw_svg(path_str: str, pen):
-    tokens = re.findall(r'([a-zA-Z])|(-?\d*(?:\.\d+)?(?:[eE][-+]?\d+)?)', path_str)
-    tokens = [t[0] or t[1] for t in tokens if t[0] or t[1]]
-    
-    current_x, current_y = 0.0, 0.0
-    start_x, start_y = 0.0, 0.0
-    is_path_open = False  # تتبع حالة المسار
-    
-    i = 0
-    cmd = 'M'
-    
-    while i < len(tokens):
-        token = tokens[i]
-        if token.isalpha():
-            cmd = token
-            i += 1
-        
-        try:
-            if cmd == 'M':
-                x, y = float(tokens[i]), float(tokens[i+1])
-                pen.moveTo((x, y))
-                current_x, current_y = x, y
-                start_x, start_y = x, y
-                is_path_open = True
-                i += 2
-            elif cmd == 'm':
-                x, y = current_x + float(tokens[i]), current_y + float(tokens[i+1])
-                pen.moveTo((x, y))
-                current_x, current_y = x, y
-                start_x, start_y = x, y
-                is_path_open = True
-                i += 2
-            # إذا حاول الرسم بدون moveTo، نجبره على البدء بـ moveTo افتراضي
-            elif not is_path_open:
-                pen.moveTo((current_x, current_y))
-                is_path_open = True
-                continue
+    """
+    دالة احترافية لقراءة الـ SVG باستخدام svgelements 
+    لحل مشاكل الأقواس (Arcs) والمسارات المضغوطة التي كان يفشل فيها الـ Regex.
+    """
+    try:
+        # قراءة المسار وتحويل الأقواس (Arcs) تلقائياً إلى منحنيات بيزير متوافقة مع الخطوط
+        svg_path = Path(path_str)
+        svg_path.approximate_arcs_with_cubics()
 
-            elif cmd == 'L':
-                x, y = float(tokens[i]), float(tokens[i+1])
-                pen.lineTo((x, y))
-                current_x, current_y = x, y
-                i += 2
-            elif cmd == 'l':
-                x, y = current_x + float(tokens[i]), current_y + float(tokens[i+1])
-                pen.lineTo((x, y))
-                current_x, current_y = x, y
-                i += 2
-            elif cmd == 'H':
-                x = float(tokens[i])
-                pen.lineTo((x, current_y))
-                current_x = x
-                i += 1
-            elif cmd == 'h':
-                x = current_x + float(tokens[i])
-                pen.lineTo((x, current_y))
-                current_x = x
-                i += 1
-            elif cmd == 'V':
-                y = float(tokens[i])
-                pen.lineTo((current_x, y))
-                current_y = y
-                i += 1
-            elif cmd == 'v':
-                y = current_y + float(tokens[i])
-                pen.lineTo((current_x, y))
-                current_y = y
-                i += 1
-            elif cmd == 'C':
-                x1, y1 = float(tokens[i]), float(tokens[i+1])
-                x2, y2 = float(tokens[i+2]), float(tokens[i+3])
-                x, y = float(tokens[i+4]), float(tokens[i+5])
-                pen.curveTo((x1, y1), (x2, y2), (x, y))
-                current_x, current_y = x, y
-                i += 6
-            elif cmd == 'c':
-                x1, y1 = current_x + float(tokens[i]), current_y + float(tokens[i+1])
-                x2, y2 = current_x + float(tokens[i+2]), current_y + float(tokens[i+3])
-                x, y = current_x + float(tokens[i+4]), current_y + float(tokens[i+5])
-                pen.curveTo((x1, y1), (x2, y2), (x, y))
-                current_x, current_y = x, y
-                i += 6
-            elif cmd == 'Q':
-                x1, y1 = float(tokens[i]), float(tokens[i+1])
-                x, y = float(tokens[i+2]), float(tokens[i+3])
-                pen.qCurveTo((x1, y1), (x, y))
-                current_x, current_y = x, y
-                i += 4
-            elif cmd == 'q':
-                x1, y1 = current_x + float(tokens[i]), current_y + float(tokens[i+1])
-                x, y = current_x + float(tokens[i+2]), current_y + float(tokens[i+3])
-                pen.qCurveTo((x1, y1), (x, y))
-                current_x, current_y = x, y
-                i += 4
-            elif cmd in ('Z', 'z'):
+        for segment in svg_path:
+            if isinstance(segment, Move):
+                pen.moveTo((segment.end.x, segment.end.y))
+            elif isinstance(segment, Line):
+                pen.lineTo((segment.end.x, segment.end.y))
+            elif isinstance(segment, QuadraticBezier):
+                pen.qCurveTo((segment.control.x, segment.control.y), (segment.end.x, segment.end.y))
+            elif isinstance(segment, CubicBezier):
+                # Cu2QuPen الذي يغلف هذا القلم سيقوم بتحويل الـ Cubic إلى Quadratic تلقائياً
+                pen.curveTo((segment.control1.x, segment.control1.y),
+                            (segment.control2.x, segment.control2.y),
+                            (segment.end.x, segment.end.y))
+            elif isinstance(segment, Close):
                 pen.closePath()
-                current_x, current_y = start_x, start_y
-                is_path_open = False # المسار أغلق الآن
-                i += 0
-            else:
-                i += 1
-        except (IndexError, ValueError):
-            i += 1
-            
-# ==========================================
-# 3. مسار توليد ملف الخط
-# ==========================================
+    except Exception as e:
+        print(f"Error parsing path using svgelements: {e}")
+
 @app.post("/api/generate-font")
 def generate_font(request: FontRequest):
     if not request.glyphs:
@@ -166,14 +81,14 @@ def generate_font(request: FontRequest):
         if g.descent is not None:
             descent = min(descent, g.descent)
             
-    fb = FontBuilder(unitsPerEm=1024, isTTF=True)
+    # تم التعديل إلى 1000 ليتطابق مع حسابات الفرونت اند
+    fb = FontBuilder(unitsPerEm=1000, isTTF=True)
     
     glyph_order = [".notdef"]
     character_map = {}
     glyphs = {}
     metrics = {}
     
-    # مربع الـ notdef
     notdef_pen = TTGlyphPen(None)
     notdef_pen.moveTo((100, 0))
     notdef_pen.lineTo((100, ascent))
@@ -188,7 +103,6 @@ def generate_font(request: FontRequest):
     glyphs[".notdef"] = notdef_pen.glyph()
     metrics[".notdef"] = (600, 100)
     
-    # حرف المسافة (Space)
     space_included = any(g.unicode == 32 or g.name == "space" for g in request.glyphs)
     if not space_included:
         glyph_order.append("space")
@@ -197,7 +111,6 @@ def generate_font(request: FontRequest):
         glyphs["space"] = space_pen.glyph()
         metrics["space"] = (300, 0)
         
-    # معالجة بقية المحارف المرسلة
     for g in request.glyphs:
         glyph_name = g.name if g.name else f"uni{g.unicode:04X}"
         if glyph_name == ".notdef":
@@ -205,28 +118,23 @@ def generate_font(request: FontRequest):
             
         base_pen = TTGlyphPen(None)
         
-        # مصفوفة تحويل إحداثيات Y
-        transform_matrix = (1, 0, 0, -1, 0, ascent)
-        t_pen = TransformPen(base_pen, transform_matrix)
-        
-        # معالجة المنحنيات التكعيبية
-        cu2qu_pen = Cu2QuPen(t_pen, max_err=2.0)
-        
-        # رسم المسار
-        parse_and_draw_svg(g.pathData, cu2qu_pen)
+        # تم إزالة TransformPen لمنع القلب المزدوج للمحور الصادي.
+        # تحويل الـ Cubic إلى Quadratic
+        cu2qu_pen = Cu2QuPen(base_pen, max_err=2.0)
         
         try:
+            parse_and_draw_svg(g.pathData, cu2qu_pen)
             glyph_outline = base_pen.glyph()
         except Exception as e:
             print(f"Failed to compile glyph {glyph_name}: {e}")
+            # في حال الفشل نضع مساراً فارغاً كي لا ينهار ملف الخط بالكامل
             glyph_outline = TTGlyphPen(None).glyph()
             
         glyph_order.append(glyph_name)
         glyphs[glyph_name] = glyph_outline
         
-        # حساب الـ Left Side Bearing بشكل آمن 100%
+        # حساب الـ LSB
         try:
-            # نستخرج xMin الفعلي بعد الرسم بدلاً من getBounds
             lsb = int(getattr(glyph_outline, 'xMin', 0))
         except Exception:
             lsb = 0
@@ -236,7 +144,6 @@ def generate_font(request: FontRequest):
         if g.unicode and g.unicode > 0:
             character_map[int(g.unicode)] = glyph_name
             
-    # بناء جداول الخط
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap(character_map)
     fb.setupGlyphs(glyphs)
@@ -269,6 +176,5 @@ def generate_font(request: FontRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # قراءة البورت من منصة ريندر، أو استخدام 8000 كاحتياطي
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
