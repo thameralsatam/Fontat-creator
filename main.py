@@ -9,7 +9,7 @@ from typing import List, Optional
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.pens.transformPen import TransformPen
-from fontTools.pens.cu2quPen import CubicToQuadraticPen
+from fontTools.pens.cu2quPen import Cu2QuPen
 
 app = FastAPI(title="Arabic Font Generator Service")
 
@@ -209,7 +209,7 @@ def generate_font(request: FontRequest):
         t_pen = TransformPen(base_pen, transform_matrix)
         
         # 3. حل مشكلة المنحنيات التكعيبية وتحويلها لتربيعية متوافقة مع الـ TTF
-        cu2qu_pen = CubicToQuadraticPen(t_pen, max_err=2.0)
+        cu2qu_pen = Cu2QuPen(t_pen, max_err=2.0)
         
         # رسم المسار
         parse_and_draw_svg(g.pathData, cu2qu_pen)
