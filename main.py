@@ -8,10 +8,12 @@ from typing import List, Optional
 
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.pens.transformPen import TransformPen
+from fontTools.pens.cu2quPen import CubicToQuadraticPen
 
 app = FastAPI(title="Arabic Font Generator Service")
 
-# Allow CORS for easy integration with frontend
+# تفعيل الـ CORS للسماح بالاتصال من واجهة الموقع دون مشاكل
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,10 +35,9 @@ class FontRequest(BaseModel):
     fontName: Optional[str] = "SmartArabicFont"
     glyphs: List[GlyphInput]
 
-def parse_and_draw_svg(path_str: str, pen: TTGlyphPen):
-    # Regex to tokenize standard SVG path commands and numeric coordinates
+def parse_and_draw_svg(path_str: str, pen):
+    # تفكيك رموز وأرقام مسار الـ SVG
     tokens = re.findall(r'([a-zA-Z])|(-?\d*(?:\.\d+)?(?:[eE][-+]?\d+)?)', path_str)
-    # Filter out empty tuples and clean
     tokens = [t[0] or t[1] for t in tokens if t[0] or t[1]]
     
     current_x = 0.0
@@ -141,13 +142,10 @@ def parse_and_draw_svg(path_str: str, pen: TTGlyphPen):
             elif cmd in ('Z', 'z'):
                 pen.closePath()
                 current_x, current_y = start_x, start_y
-                # If there are subsequent coordinates, assume M mode
                 cmd = 'M'
             else:
-                # Unrecognized command token, skip to prevent infinite loop
                 i += 1
         except (IndexError, ValueError) as e:
-            # Safe recovery from malformed segments
             print(f"Skipping malformed command segment: {cmd}, error: {e}")
             i += 1
 
@@ -156,7 +154,7 @@ def generate_font(request: FontRequest):
     if not request.glyphs:
         raise HTTPException(status_code=400, detail="الرجاء إرسال حرف واحد على الأقل.")
     
-    # 1. Determine font metrics from inputs or defaults
+    # 1. تحديد أبعاد الخط الافتراضية
     ascent = 800
     descent = -200
     
@@ -166,16 +164,14 @@ def generate_font(request: FontRequest):
         if g.descent is not None:
             descent = min(descent, g.descent)
             
-    # Setup FontBuilder
     fb = FontBuilder(unitsPerEm=1024, isTTF=True)
     
-    # 2. Build glyph definitions, always starting with .notdef (TrueType requirement)
     glyph_order = [".notdef"]
     character_map = {}
     glyphs = {}
     metrics = {}
     
-    # Add .notdef box glyph
+    # بناء شكل مربع الـ .notdef الإجباري في خطوط TrueType
     notdef_pen = TTGlyphPen(None)
     notdef_pen.moveTo((100, 0))
     notdef_pen.lineTo((100, ascent))
@@ -187,52 +183,65 @@ def generate_font(request: FontRequest):
     notdef_pen.lineTo((450, ascent - 50))
     notdef_pen.lineTo((150, ascent - 50))
     notdef_pen.closePath()
-    glyphs[".notdef"] = notdef_pen.getGlyph()
+    glyphs[".notdef"] = notdef_pen.glyph()  # تم تصحيحها لـ .glyph()
     metrics[".notdef"] = (600, 100)
     
-    # Add Space glyph if not present
+    # إضافة مسافة تلقائية (Space) إذا لم تكن موجودة
     space_included = any(g.unicode == 32 or g.name == "space" for g in request.glyphs)
     if not space_included:
         glyph_order.append("space")
         character_map[32] = "space"
         space_pen = TTGlyphPen(None)
-        glyphs["space"] = space_pen.getGlyph()
+        glyphs["space"] = space_pen.glyph()  # تم تصحيحها لـ .glyph()
         metrics["space"] = (300, 0)
         
-    # Process user glyphs
+    # معالجة محارف المستخدم
     for g in request.glyphs:
         glyph_name = g.name if g.name else f"uni{g.unicode:04X}"
         if glyph_name == ".notdef":
             continue
             
-        # Draw glyph path onto TTGlyphPen
-        pen = TTGlyphPen(None)
-        parse_and_draw_svg(g.pathData, pen)
+        base_pen = TTGlyphPen(None)
+        
+        # 2. حل مشكلة قلب الحروف (Y-Axis Inversion)
+        # مصفوفة تحويل لقلب إحداثيات Y الخاصة بـ SVG (الضرب في -1 ثم الإزاحة للأعلى بمقدار الـ ascent)
+        transform_matrix = (1, 0, 0, -1, 0, ascent)
+        t_pen = TransformPen(base_pen, transform_matrix)
+        
+        # 3. حل مشكلة المنحنيات التكعيبية وتحويلها لتربيعية متوافقة مع الـ TTF
+        cu2qu_pen = CubicToQuadraticPen(t_pen, max_err=2.0)
+        
+        # رسم المسار
+        parse_and_draw_svg(g.pathData, cu2qu_pen)
         
         try:
-            glyph_outline = pen.getGlyph()
+            glyph_outline = base_pen.glyph()  # تم تصحيحها لـ .glyph()
         except Exception as e:
             print(f"Failed to compile glyph {glyph_name}: {e}")
-            # Fallback to empty glyph
-            glyph_outline = TTGlyphPen(None).getGlyph()
+            glyph_outline = TTGlyphPen(None).glyph()
             
         glyph_order.append(glyph_name)
         glyphs[glyph_name] = glyph_outline
         
-        # Calculate left side bearing (LSB) from path minX or default to 0
-        lsb = 0
+        # 4. حساب الـ Left Side Bearing (LSB) ديناميكياً من أبعاد الحرف الفعلي
+        # لمنع تداخل أو التصاق الحروف بشكل مشوه
+        try:
+            bbox = glyph_outline.getBounds(glyphs)
+            lsb = int(bbox[0]) if bbox else 0
+        except Exception:
+            lsb = 0
+            
         metrics[glyph_name] = (int(g.advanceWidth), lsb)
         
         if g.unicode and g.unicode > 0:
             character_map[int(g.unicode)] = glyph_name
             
-    # Setup glyph structure
+    # إعداد بنية وجداول الخط
     fb.setupGlyphOrder(glyph_order)
     fb.setupCharacterMap(character_map)
     fb.setupGlyphs(glyphs)
     fb.setupHorizontalMetrics(metrics)
     
-    # Setup table headers and name fields
     font_name_safe = re.sub(r'[^a-zA-Z0-9]', '', request.fontName)
     fb.setupHorizontalHeader(ascent=int(ascent), descent=int(descent))
     fb.setupNameTable({
@@ -246,7 +255,7 @@ def generate_font(request: FontRequest):
     fb.setupOS2(sTypoAscender=int(ascent), sTypoDescender=int(descent))
     fb.setupPost()
     
-    # Compile and return standard TTF file
+    # توليد ملف الـ TTF وحفظه في الذاكرة كـ Binary وإرساله للمتصفح
     buf = BytesIO()
     fb.save(buf)
     buf.seek(0)
@@ -261,5 +270,4 @@ def generate_font(request: FontRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # Standalone script runner
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
