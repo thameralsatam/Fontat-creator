@@ -51,6 +51,7 @@ def parse_and_draw_svg(path_str: str, pen):
     
     current_x, current_y = 0.0, 0.0
     start_x, start_y = 0.0, 0.0
+    is_path_open = False  # تتبع حالة المسار
     
     i = 0
     cmd = 'M'
@@ -60,8 +61,6 @@ def parse_and_draw_svg(path_str: str, pen):
         if token.isalpha():
             cmd = token
             i += 1
-            if i >= len(tokens) and cmd not in ('Z', 'z'):
-                break
         
         try:
             if cmd == 'M':
@@ -69,13 +68,21 @@ def parse_and_draw_svg(path_str: str, pen):
                 pen.moveTo((x, y))
                 current_x, current_y = x, y
                 start_x, start_y = x, y
+                is_path_open = True
                 i += 2
             elif cmd == 'm':
                 x, y = current_x + float(tokens[i]), current_y + float(tokens[i+1])
                 pen.moveTo((x, y))
                 current_x, current_y = x, y
                 start_x, start_y = x, y
+                is_path_open = True
                 i += 2
+            # إذا حاول الرسم بدون moveTo، نجبره على البدء بـ moveTo افتراضي
+            elif not is_path_open:
+                pen.moveTo((current_x, current_y))
+                is_path_open = True
+                continue
+
             elif cmd == 'L':
                 x, y = float(tokens[i]), float(tokens[i+1])
                 pen.lineTo((x, y))
@@ -135,13 +142,13 @@ def parse_and_draw_svg(path_str: str, pen):
             elif cmd in ('Z', 'z'):
                 pen.closePath()
                 current_x, current_y = start_x, start_y
-                cmd = 'M'
+                is_path_open = False # المسار أغلق الآن
+                i += 0
             else:
                 i += 1
-        except (IndexError, ValueError) as e:
-            print(f"Skipping malformed command segment: {cmd}, error: {e}")
+        except (IndexError, ValueError):
             i += 1
-
+            
 # ==========================================
 # 3. مسار توليد ملف الخط
 # ==========================================
